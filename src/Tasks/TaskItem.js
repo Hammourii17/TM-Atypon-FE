@@ -115,7 +115,7 @@ const TaskItem = ({ task }) => {
         <>
           <TableCell>{task.title}</TableCell>
           <TableCell>{task.description}</TableCell>
-          <TableCell>{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'Invalid Date'}</TableCell>
+          <TableCell>{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'No Date Set'}</TableCell>
           <TableCell>{task.priority}</TableCell>
           <TableCell>{completed ? 'Completed' : 'Pending'}</TableCell>
           <TableCell>
