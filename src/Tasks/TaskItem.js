@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useDeleteTaskMutation, useUpdateTaskMutation } from '../features/api/apiSlice';
 
-const TaskItem = ({ task, onTaskUpdated }) => {
+const TaskItem = ({ task }) => {
   const [deleteTask] = useDeleteTaskMutation();
   const [updateTask] = useUpdateTaskMutation();
   const [isEditing, setIsEditing] = useState(false);
@@ -12,36 +12,38 @@ const TaskItem = ({ task, onTaskUpdated }) => {
   const [completed, setCompleted] = useState(task.completed);
   const [error, setError] = useState('');
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback ( async () => {
     try {
       await deleteTask(task._id).unwrap();
-      onTaskUpdated();
+
     } catch (err) {
       console.error('Failed to delete task', err);
     }
-  };
+  },);
 
-  const handleUpdate = async (e) => {
-    e.preventDefault();
+  const handleUpdate = useCallback  (async () => {
+
     try {
       await updateTask({ id: task._id, title, description, dueDate, priority, completed }).unwrap();
       setIsEditing(false);
-      onTaskUpdated();
+
     } catch (err) {
       setError('Failed to update task');
       console.error('Failed to update task', err);
     }
-  };
+  },[title, description, dueDate, priority, completed]
+);
 
-  const handleComplete = async () => {
+  const handleComplete = useCallback (async () => {
     try {
       await updateTask({ id: task._id, completed: !completed }).unwrap();
       setCompleted(!completed);
-      onTaskUpdated();
+
     } catch (err) {
       console.error('Failed to update task', err);
     }
-  };
+  },  [completed]
+);
 
   return (
     <div className={`border rounded p-4 mb-4 ${completed ? 'bg-green-100' : ''}`}>

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useFetchTasksQuery } from '../features/api/apiSlice';
 import TaskItem from './TaskItem';
 import { filterTasks, sortTasks } from '../utils/taskUtils';
@@ -19,18 +19,12 @@ const defaultTheme = createTheme();
 const TaskList = () => {
   const [filter, setFilter] = useState({ completed: '', dueDate: '', priority: '' });
   const [sortBy, setSortBy] = useState('date');
-  const { data: tasks = [], error, isLoading, refetch } = useFetchTasksQuery();
+  const { data: tasks = [], error, isLoading } = useFetchTasksQuery();
 
   const filteredTasks = useMemo(() => filterTasks(tasks, filter), [tasks, filter]);
   const sortedTasks = useMemo(() => sortTasks(filteredTasks, sortBy), [filteredTasks, sortBy]);
 
-  const handleTaskCreated = useCallback(() => {
-    refetch();
-  }, [refetch]);
-
-  const handleTaskUpdated = useCallback(() => {
-    refetch();
-  }, [refetch]);
+ 
 
   if (isLoading) {
     return <Typography>Loading tasks...</Typography>;
@@ -56,7 +50,7 @@ const TaskList = () => {
             Your Tasks
           </Typography>
           <Box sx={{ mt: 1, width: '100%' }}>
-            <TaskForm onTaskCreated={handleTaskCreated} />
+            <TaskForm  />
             <Grid container spacing={2} sx={{ mb: 2 }}>
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth variant="outlined" margin="dense">
@@ -88,7 +82,7 @@ const TaskList = () => {
             </Grid>
             <Box>
               {sortedTasks.map(task => ( 
-                <TaskItem key={task._id} task={task} onTaskUpdated={handleTaskUpdated} />
+                <TaskItem key={task._id} task={task}  />
               ))}
             </Box>
           </Box>

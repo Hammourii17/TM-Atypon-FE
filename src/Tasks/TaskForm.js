@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import Button from '@mui/material/Button';
 import { useAddTaskMutation } from '../features/api/apiSlice';
 
-const TaskForm = ({ onTaskCreated }) => {
+const TaskForm = () => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [addTask, { isLoading, isError, error }] = useAddTaskMutation();
@@ -15,13 +15,12 @@ const TaskForm = ({ onTaskCreated }) => {
         const newTask = await addTask({ title, description }).unwrap();
         setTitle('');
         setDescription('');
-        onTaskCreated();
         console.log('Task created successfully', newTask);
       } catch (err) {
         console.error('Failed to create task:', err);
       }
     },
-    [title, description, addTask, onTaskCreated]
+    [title, description, addTask]
   );
 
   return (
