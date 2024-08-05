@@ -1,5 +1,12 @@
 import React, { useCallback, useState } from 'react';
 import { useDeleteTaskMutation, useUpdateTaskMutation } from '../features/api/apiSlice';
+import TableRow from '@mui/material/TableRow';
+import TableCell from '@mui/material/TableCell';
+import IconButton from '@mui/material/IconButton';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import CheckIcon from '@mui/icons-material/Check';
+import CloseIcon from '@mui/icons-material/Close';
 
 const TaskItem = ({ task }) => {
   const [deleteTask] = useDeleteTaskMutation();
@@ -10,47 +17,40 @@ const TaskItem = ({ task }) => {
   const [dueDate, setDueDate] = useState(task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '');
   const [priority, setPriority] = useState(task.priority || 'Low');
   const [completed, setCompleted] = useState(task.completed);
-  const [error, setError] = useState('');
+  const [ setError] = useState('');
 
-  const handleDelete = useCallback ( async () => {
+  const handleDelete = useCallback(async () => {
     try {
       await deleteTask(task._id).unwrap();
-
     } catch (err) {
       console.error('Failed to delete task', err);
     }
-  },);
+  }, [deleteTask, task._id]);
 
-  const handleUpdate = useCallback  (async () => {
-
+  const handleUpdate = useCallback(async () => {
     try {
       await updateTask({ id: task._id, title, description, dueDate, priority, completed }).unwrap();
       setIsEditing(false);
-
     } catch (err) {
       setError('Failed to update task');
       console.error('Failed to update task', err);
     }
-  },[title, description, dueDate, priority, completed]
-);
+  }, [title, description, dueDate, priority, completed, task._id, updateTask, setError]);
 
-  const handleComplete = useCallback (async () => {
+  const handleComplete = useCallback(async () => {
     try {
       await updateTask({ id: task._id, completed: !completed }).unwrap();
       setCompleted(!completed);
-
     } catch (err) {
       console.error('Failed to update task', err);
     }
-  },  [completed]
-);
+  }, [completed, task._id, updateTask]);
 
   return (
-    <div className={`border rounded p-4 mb-4 ${completed ? 'bg-green-100' : ''}`}>
+    <TableRow>
       {isEditing ? (
-        <form onSubmit={handleUpdate}>
-          <div className="mb-4">
-            <label className="block text-gray-700">Title:</label>
+        <>
+          <TableCell>
             <input
               type="text"
               value={title}
@@ -58,27 +58,24 @@ const TaskItem = ({ task }) => {
               className="border rounded w-full py-2 px-3"
               required
             />
-          </div>
-          <div className="mb-4">
-            <label className="block text-gray-700">Description:</label>
+          </TableCell>
+          <TableCell>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="border rounded w-full py-2 px-3"
               required
             />
-          </div>
-          <div className="mb-4">
-            <label className="block text-gray-700">Due Date:</label>
+          </TableCell>
+          <TableCell>
             <input
               type="date"
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
               className="border rounded w-full py-2 px-3"
             />
-          </div>
-          <div className="mb-4">
-            <label className="block text-gray-700">Priority:</label>
+          </TableCell>
+          <TableCell>
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value)}
@@ -88,46 +85,38 @@ const TaskItem = ({ task }) => {
               <option value="Medium">Medium</option>
               <option value="High">High</option>
             </select>
-          </div>
-          {error && <p className="text-red-500">{error}</p>}
-          <button type="submit" className="bg-blue-500 text-white py-2 px-4 rounded mr-2">
-            Update
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsEditing(false)}
-            className="bg-gray-500 text-white py-2 px-4 rounded"
-          >
-            Cancel
-          </button>
-        </form>
+          </TableCell>
+          <TableCell>{completed ? 'Completed' : 'Pending'}</TableCell>
+          <TableCell>
+            <IconButton onClick={handleUpdate} color="primary">
+              <CheckIcon />
+            </IconButton>
+            <IconButton onClick={() => setIsEditing(false)} color="secondary">
+              <CloseIcon />
+            </IconButton>
+          </TableCell>
+        </>
       ) : (
         <>
-          <h3 className="text-xl">{task.title}</h3>
-          <p>{task.description}</p>
-          <p>Due Date: {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'Invalid Date'}</p>
-          <p>Priority: {task.priority}</p>
-          <button
-            onClick={() => setIsEditing(true)}
-            className="bg-yellow-500 text-white py-1 px-3 rounded mr-2"
-          >
-            Edit
-          </button>
-          <button
-            onClick={handleDelete}
-            className="bg-red-500 text-white py-1 px-3 rounded mr-2"
-          >
-            Delete
-          </button>
-          <button
-            onClick={handleComplete}
-            className={`py-1 px-3 rounded ${completed ? 'bg-gray-500' : 'bg-green-500'} text-white`}
-          >
-            {completed ? 'Undo Complete' : 'Mark Complete'}
-          </button>
+          <TableCell>{task.title}</TableCell>
+          <TableCell>{task.description}</TableCell>
+          <TableCell>{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'Invalid Date'}</TableCell>
+          <TableCell>{task.priority}</TableCell>
+          <TableCell>{completed ? 'Completed' : 'Pending'}</TableCell>
+          <TableCell>
+            <IconButton onClick={() => setIsEditing(true)} color="primary">
+              <EditIcon />
+            </IconButton>
+            <IconButton onClick={handleDelete} color="secondary">
+              <DeleteIcon />
+            </IconButton>
+            <IconButton onClick={handleComplete} color={completed ? 'default' : 'success'}>
+              {completed ? <CloseIcon /> : <CheckIcon />}
+            </IconButton>
+          </TableCell>
         </>
       )}
-    </div>
+    </TableRow>
   );
 };
 
