@@ -3,6 +3,11 @@ import { useDeleteTaskMutation, useUpdateTaskMutation } from '../features/api/ap
 import TableRow from '@mui/material/TableRow';
 import TableCell from '@mui/material/TableCell';
 import IconButton from '@mui/material/IconButton';
+import TextField from '@mui/material/TextField';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
@@ -17,7 +22,7 @@ const TaskItem = ({ task }) => {
   const [dueDate, setDueDate] = useState(task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '');
   const [priority, setPriority] = useState(task.priority || 'Low');
   const [completed, setCompleted] = useState(task.completed);
-  const [ setError] = useState('');
+  const [setError] = useState('');
 
   const handleDelete = useCallback(async () => {
     try {
@@ -51,40 +56,50 @@ const TaskItem = ({ task }) => {
       {isEditing ? (
         <>
           <TableCell>
-            <input
-              type="text"
+            <TextField
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="border rounded w-full py-2 px-3"
+              label="Title"
+              variant="outlined"
+              fullWidth
               required
             />
           </TableCell>
           <TableCell>
-            <textarea
+            <TextField
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="border rounded w-full py-2 px-3"
+              label="Description"
+              variant="outlined"
+              multiline
+              fullWidth
               required
             />
           </TableCell>
           <TableCell>
-            <input
+            <TextField
               type="date"
               value={dueDate}
               onChange={(e) => setDueDate(e.target.value)}
-              className="border rounded w-full py-2 px-3"
+              label="Due Date"
+              InputLabelProps={{ shrink: true }}
+              variant="outlined"
+              fullWidth
             />
           </TableCell>
           <TableCell>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value)}
-              className="border rounded w-full py-2 px-3"
-            >
-              <option value="Low">Low</option>
-              <option value="Medium">Medium</option>
-              <option value="High">High</option>
-            </select>
+            <FormControl variant="outlined" fullWidth>
+              <InputLabel>Priority</InputLabel>
+              <Select
+                value={priority}
+                onChange={(e) => setPriority(e.target.value)}
+                label="Priority"
+              >
+                <MenuItem value="Low">Low</MenuItem>
+                <MenuItem value="Medium">Medium</MenuItem>
+                <MenuItem value="High">High</MenuItem>
+              </Select>
+            </FormControl>
           </TableCell>
           <TableCell>{completed ? 'Completed' : 'Pending'}</TableCell>
           <TableCell>

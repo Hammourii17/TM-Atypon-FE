@@ -54,8 +54,8 @@ const TaskList = () => {
       <TaskForm ref={taskFormRef} />
 
         <Grid container spacing={2} sx={{ mb: 2 }}>
-
-            <FormControl  variant="outlined" margin="dense">
+          <Grid item xs={12} sm={6}>
+            <FormControl fullWidth variant="outlined" margin="dense">
               <InputLabel>Filter</InputLabel>
               <Select
                 value={filter.completed}
@@ -67,9 +67,9 @@ const TaskList = () => {
                 <MenuItem value="pending">Pending</MenuItem>
               </Select>
             </FormControl>
-
-
-            <FormControl  variant="outlined" margin="dense">
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <FormControl fullWidth variant="outlined" margin="dense">
               <InputLabel>Sort By</InputLabel>
               <Select
                 value={sortBy}
@@ -81,7 +81,7 @@ const TaskList = () => {
               </Select>
             </FormControl>
           </Grid>
-
+        </Grid>
         <TableContainer component={Paper}>
           <Table sx={{ minWidth: 650 }} aria-label="task table">
             <TableHead>
