@@ -1,6 +1,6 @@
 // © scalp-confluence-strategy
 //@version=5
-strategy("Scalp Confluence: Accum/POC + Sessions + Fib ($10/$20/$30)", overlay=true,
+strategy("Scalp Confluence: Accum/POC + Sessions + Fib (auto SL)", overlay=true,
      initial_capital=10000, currency=currency.USD,
      max_lines_count=500, max_labels_count=500, max_boxes_count=500)
 
@@ -16,10 +16,16 @@ strategy("Scalp Confluence: Accum/POC + Sessions + Fib ($10/$20/$30)", overlay=t
 // 3) A trade is TAKEN only if:
 //    - last CLOSED 4H candle agrees (above EMA for buys, below for sells) - mandatory
 //    - confluence >= your minimum
-//    - structural SL is not wider than Max SL
 //    - no trade already open + cooldown passed
-// 4) Exits: TP1 / TP2 / TP3 (1/3 each). SL -> entry after TP1, SL -> TP1 after TP2.
-// Use on the 15m chart (5m also works).
+//    A wide stop NEVER skips a trade: the signal is shown with its
+//    suitable stop, flagged "wide SL", and (in risk sizing) gets a
+//    smaller position so the $ risk stays the same.
+// 4) Stop-loss (Auto mode, default) is sized to the market, not a fixed $:
+//    refATR = max(ATR, 100-bar average ATR); Magic stop = k x refATR,
+//    k = 2.5 on <=1h rising to 3.0 on 4h (wider on higher timeframes).
+//    TP1/TP2/TP3 = 1R/2R/3R of that stop. "$ move"/"Pips" modes still work.
+// 5) Exits: TP1 / TP2 / TP3 (1/3 each). SL -> entry after TP1, SL -> TP1 after TP2.
+// Works on 15m, 1h and 4h. Use the Strategy Tester to backtest on XAUUSD.
 // ============================================================
 
 // ============================================================
@@ -33,19 +39,27 @@ minConfluence    = input.int(1, "Min confluence (1 = any, 2 = stricter, 3 = all 
 confWindow       = input.int(6, "Confluence look-back window (bars)", minval=1, group=grpEng)
 
 grpRisk = "2) Targets & Risk"
-targetMode    = input.string("Price ($ move)", "Unit for all distances", options=["Price ($ move)", "Pips"], group=grpRisk)
-tp1Val        = input.float(10, "TP1 (closes 1/3)", minval=0.01, group=grpRisk)
-tp2Val        = input.float(20, "TP2 (closes 1/3)", minval=0.01, group=grpRisk)
-tp3Val        = input.float(30, "TP3 (closes the rest)", minval=0.01, group=grpRisk)
-minSLVal      = input.float(5, "Min SL distance", minval=0.01, group=grpRisk)
-maxSLVal      = input.float(15, "Max SL distance (wider = trade skipped)", minval=0.01, group=grpRisk)
-contracts     = input.int(3, "Position size (min 3, split across TPs)", minval=3, group=grpRisk)
+AUTO_MODE     = "Auto (ATR, adapts to timeframe)"
+targetMode    = input.string(AUTO_MODE, "Unit for all distances", options=[AUTO_MODE, "Price ($ move)", "Pips"], group=grpRisk, tooltip="Auto: SL sized by volatility, TPs at 1R/2R/3R. $/Pips: the fixed distances below.")
+tp1Val        = input.float(10, "TP1 (closes 1/3) - $/Pips mode", minval=0.01, group=grpRisk)
+tp2Val        = input.float(20, "TP2 (closes 1/3) - $/Pips mode", minval=0.01, group=grpRisk)
+tp3Val        = input.float(30, "TP3 (closes the rest) - $/Pips mode", minval=0.01, group=grpRisk)
+minSLVal      = input.float(5, "Min SL distance - $/Pips mode", minval=0.01, group=grpRisk)
+maxSLVal      = input.float(15, "Wide SL warning above - $/Pips mode (trade is still taken)", minval=0.01, group=grpRisk)
+sizeMode      = input.string("Risk $ per trade", "Position sizing", options=["Risk $ per trade", "Fixed"], group=grpRisk, tooltip="Risk $: wider stop = smaller size, so every trade risks the same dollars.")
+riskUSD       = input.float(100, "Risk per trade ($) - risk sizing", minval=1, group=grpRisk)
+contracts     = input.int(3, "Position size - fixed sizing (min 3, split across TPs)", minval=3, group=grpRisk)
 useBreakeven  = input.bool(true, "Move SL to entry after TP1", group=grpRisk)
 useLockTP1    = input.bool(true, "Move SL to TP1 after TP2", group=grpRisk)
 tradeCooldown = input.int(4, "Bars to wait between trades", minval=0, group=grpRisk)
 customPipSize = input.float(0.0, "Pip size override (Pips mode only, 0 = auto)", minval=0.0, step=0.00001, group=grpRisk)
 
-grpSL = "3) Structural Stop"
+grpSL = "3) Stop-loss"
+slMethod      = input.string("Magic (volatility)", "Stop method (Auto mode)", options=["Magic (volatility)", "Structure (swing + ATR)", "Wider of both"], group=grpSL, tooltip="Magic won the backtest; Structure is the original swing/Fib stop; Wider of both uses whichever is further away.")
+magicK        = input.float(0.0, "Magic multiplier (0 = auto: 2.5 on <=1h, 3.0 on 4h)", minval=0.0, step=0.1, group=grpSL)
+tpR1          = input.float(1.0, "TP1 (R) - Auto mode", minval=0.1, step=0.1, group=grpSL)
+tpR2          = input.float(2.0, "TP2 (R) - Auto mode", minval=0.1, step=0.1, group=grpSL)
+tpR3          = input.float(3.0, "TP3 (R) - Auto mode", minval=0.1, step=0.1, group=grpSL)
 swingLen      = input.int(5, "Swing lookback (bars each side)", minval=2, group=grpSL)
 atrLen        = input.int(14, "ATR length", minval=1, group=grpSL)
 atrMult       = input.float(0.5, "ATR buffer beyond swing", minval=0.0, step=0.1, group=grpSL)
@@ -98,7 +112,8 @@ showSwings    = input.bool(true, "Swing high/low triangles", group=grpD)
 // ============================================================
 isJPY     = str.contains(syminfo.ticker, "JPY")
 pipSize   = customPipSize > 0 ? customPipSize : (isJPY ? 0.01 : syminfo.mintick * 10)
-unitMult  = targetMode == "Price ($ move)" ? 1.0 : pipSize
+isAuto    = targetMode == AUTO_MODE
+unitMult  = targetMode == "Pips" ? pipSize : 1.0
 tp1Dist   = tp1Val * unitMult
 tp2Dist   = tp2Val * unitMult
 tp3Dist   = tp3Val * unitMult
@@ -134,6 +149,12 @@ if not na(swingLowVal)
 
 atrVal    = ta.atr(atrLen)
 atrBuffer = atrVal * atrMult
+
+// Reference ATR: a quiet patch right before a signal can't make the stop too tight
+refAtr  = math.max(atrVal, nz(ta.sma(atrVal, 100), atrVal))
+tfHours = timeframe.in_seconds(timeframe.period) / 3600.0
+kAuto   = 2.5 + 0.5 * math.max(0.0, math.min(1.0, math.log(math.max(tfHours, 1.0)) / math.log(2.0) / 2.0))
+kMagic  = magicK > 0 ? magicK : kAuto
 
 plotshape(showSwings and not na(swingHighVal), title="Swing High", location=location.abovebar,
      style=shape.triangledown, color=color.new(color.red, 40), size=size.tiny, offset=-swingLen)
@@ -392,19 +413,31 @@ shortTrig = accumShort or sessionShort or fibShort
 longName  = accumLong ? "Accum + POC" : sessionLong ? sessionLongName : "Fib Pocket"
 shortName = accumShort ? "Accum + POC" : sessionShort ? sessionShortName : "Fib Pocket"
 
+// Structural stop (original logic)
 float slL = fibLong ? invL - atrBuffer : lastSwingLow - atrBuffer
 if na(slL) or slL >= close
     slL := close - atrVal * 1.5
-if close - slL < minSL
-    slL := close - minSL
-slWideL = close - slL > maxSL
-
 float slS = fibShort ? invS + atrBuffer : lastSwingHigh + atrBuffer
 if na(slS) or slS <= close
     slS := close + atrVal * 1.5
-if slS - close < minSL
-    slS := close + minSL
-slWideS = slS - close > maxSL
+
+// Auto mode: pick the stop method, never tighter than 1 refATR of noise
+if isAuto
+    magicL = close - kMagic * refAtr
+    magicS = close + kMagic * refAtr
+    slL := slMethod == "Magic (volatility)" ? magicL : slMethod == "Structure (swing + ATR)" ? slL : math.min(slL, magicL)
+    slS := slMethod == "Magic (volatility)" ? magicS : slMethod == "Structure (swing + ATR)" ? slS : math.max(slS, magicS)
+
+minStop = isAuto ? refAtr : minSL
+if close - slL < minStop
+    slL := close - minStop
+if slS - close < minStop
+    slS := close + minStop
+
+// Wide stops are flagged, never skipped
+wideStop = isAuto ? 4.0 * refAtr : maxSL
+slWideL  = close - slL > wideStop
+slWideS  = slS - close > wideStop
 
 // ============================================================
 // FINAL DECISION
@@ -413,8 +446,8 @@ var int lastTradeBar = -100000
 flat   = strategy.position_size == 0
 cooled = bar_index - lastTradeBar > tradeCooldown
 
-finalLong  = longTrig and flat and cooled and trend4hUp and scoreL >= minConfluence and not slWideL
-finalShort = shortTrig and flat and cooled and trend4hDown and scoreS >= minConfluence and not slWideS and not finalLong
+finalLong  = longTrig and flat and cooled and trend4hUp and scoreL >= minConfluence
+finalShort = shortTrig and flat and cooled and trend4hDown and scoreS >= minConfluence and not finalLong
 
 // SKIP labels: a setup appeared but was rejected (shows the reason)
 skipL = longTrig and flat and cooled and not finalLong
@@ -423,7 +456,7 @@ skipS = shortTrig and flat and cooled and not finalShort and not finalLong and n
 var int lastSkipBar = -100000
 if showSkipped and (skipL or skipS) and bar_index - lastSkipBar >= skipCooldown
     lastSkipBar := bar_index
-    reason = skipL ? (not trend4hUp ? "4H ✗" : scoreL < minConfluence ? "Low conf" : "SL too wide") : (not trend4hDown ? "4H ✗" : scoreS < minConfluence ? "Low conf" : "SL too wide")
+    reason = skipL ? (not trend4hUp ? "4H ✗" : "Low conf") : (not trend4hDown ? "4H ✗" : "Low conf")
     label.new(bar_index, skipL ? low : high, "SKIP " + (skipL ? "buy" : "sell") + ": " + reason,
          yloc=skipL ? yloc.belowbar : yloc.abovebar, style=skipL ? label.style_label_up : label.style_label_down,
          color=color.new(color.orange, 20), textcolor=color.white, size=size.tiny)
@@ -437,6 +470,7 @@ var float tSL    = na
 var float tTP1   = na
 var float tTP2   = na
 var float tTP3   = na
+var int   tQty   = 3
 var bool  tHit1  = false
 var bool  tHit2  = false
 
@@ -457,24 +491,29 @@ if finalLong or finalShort
     tDir   := finalLong ? 1 : -1
     tEntry := close
     tSL    := finalLong ? slL : slS
-    tTP1   := close + tDir * tp1Dist
-    tTP2   := close + tDir * tp2Dist
-    tTP3   := close + tDir * tp3Dist
+    risk    = math.abs(close - tSL)
+    tTP1   := close + tDir * (isAuto ? tpR1 * risk : tp1Dist)
+    tTP2   := close + tDir * (isAuto ? tpR2 * risk : tp2Dist)
+    tTP3   := close + tDir * (isAuto ? tpR3 * risk : tp3Dist)
     tHit1  := false
     tHit2  := false
     lastTradeBar := bar_index
+    // Risk sizing: wider stop -> smaller size (min 3 so it splits across the TPs)
+    tQty   := sizeMode == "Fixed" ? contracts : math.max(3, int(math.floor(riskUSD / (risk * syminfo.pointvalue))))
 
     if finalLong
-        strategy.entry("Scalp", strategy.long, qty=contracts)
+        strategy.entry("Scalp", strategy.long, qty=tQty)
     else
-        strategy.entry("Scalp", strategy.short, qty=contracts)
+        strategy.entry("Scalp", strategy.short, qty=tQty)
 
     zoneLo = close - atrVal * entryBandMult
     zoneHi = close + atrVal * entryBandMult
     score  = finalLong ? scoreL : scoreS
     stars  = score >= 3 ? "★★★" : score == 2 ? "★★☆" : "★☆☆"
     sigTxt = (finalLong ? "BUY " : "SELL ") + stars + "\n" + (finalLong ? longName : shortName) +
-         "\nZone " + str.tostring(zoneLo, format.mintick) + " - " + str.tostring(zoneHi, format.mintick)
+         "\nZone " + str.tostring(zoneLo, format.mintick) + " - " + str.tostring(zoneHi, format.mintick) +
+         "\nSL " + str.tostring(risk, format.mintick) + " away · size " + str.tostring(tQty) +
+         ((finalLong ? slWideL : slWideS) ? "\n⚠ wide SL · size down" : "")
 
     if showSignals
         label.new(bar_index, finalLong ? low : high, sigTxt,
@@ -514,7 +553,7 @@ if inTrade
             label.set_text(lbTP2, "TP2 ✓ " + str.tostring(tTP2, format.mintick))
 
     effSL = tHit2 and useLockTP1 ? tTP1 : tHit1 and useBreakeven ? tEntry : tSL
-    qPart = math.max(1, math.floor(contracts / 3))
+    qPart = math.max(1, math.floor(tQty / 3))
 
     if not tHit1
         strategy.exit("TP1", from_entry="Scalp", qty=qPart, limit=tTP1, stop=effSL)
@@ -549,5 +588,6 @@ if barstate.islast
          "4H trend: " + (trend4hUp ? "UP (buys only)" : "DOWN (sells only)") +
          "\nSession: " + sessNow +
          "\nLondon bias: " + biasTxt +
-         "\nFib: " + legTxt,
+         "\nFib: " + legTxt +
+         "\nStop: " + (isAuto ? slMethod + " · k " + str.tostring(kMagic, "#.##") + " · refATR " + str.tostring(refAtr, format.mintick) : targetMode),
          style=label.style_label_left, color=color.new(color.blue, 70), textcolor=color.white, size=size.small)

@@ -100,3 +100,36 @@ python magic_backtest.py datas.csv
 
 Open the Pine Editor, paste `magic_signal.pine`, click **Add to chart**, then
 switch the chart to 1h or 4h.
+
+## Scalp Confluence strategy (`scalp_confluence.pine`)
+
+This is your multi-engine strategy (Accumulation/POC, Asia→London→NY sessions,
+Fib golden pocket, and the 4H EMA filter), now with the Magic stop-loss:
+
+- **"SL too wide" no longer skips trades.** Every signal is taken and drawn with
+  its stop. A stop wider than 4× refATR (or wider than the warning value in
+  $/Pips mode) gets a "⚠ wide SL · size down" line on the label.
+- **Auto stop (default)** is `k × refATR`, with k = 2.5 on 1h and below and 3.0
+  on 4h. You can switch to your original structure stop, or to "wider of both".
+  TP1/TP2/TP3 are 1R/2R/3R of the stop. The old fixed $10/$20/$30 mode is still
+  available.
+- **Risk sizing (default):** position size = risk $ ÷ stop distance. A wider
+  stop means a smaller size, so every trade risks about the same dollars. The
+  minimum size is 3 units (so it can split across the 3 TPs), which can push
+  the risk above target on very wide stops.
+- **Backtest on gold:** it's a `strategy()`, so the TradingView Strategy Tester
+  runs it on your XAUUSD data. Compare the stop methods on 1h and 4h there.
+  Add your broker's commission and slippage in the strategy's Properties.
+
+**Colors:**
+
+| Color | Meaning |
+|---|---|
+| Blue background | Asia session |
+| Orange background | London session |
+| Purple background | New York session |
+| Blue box | Asia high/low range |
+| Orange box | London range |
+| Grey box | Accumulation range |
+| Orange dots | POC |
+| Yellow box | Fib golden pocket |
