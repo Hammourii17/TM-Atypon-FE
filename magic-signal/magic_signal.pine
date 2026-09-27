@@ -1,0 +1,274 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+//@version=6
+indicator("Magic Signal", shorttitle = "Magic", overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Magic Signal
+//   Simple trend signal + a stop-loss that is never a fixed number.
+//   Every signal is shown, however wide its stop - the stop is sized to the
+//   market, and the label tells you when it is wide so you can size down.
+//
+//   Signal : EMA 21 crosses EMA 55, in the direction of EMA 200, while ADX > 25
+//   Stop   : measured in refATR = max(ATR 14, 100-bar average of ATR 14)
+//            Magic     k x refATR, k = 2.5 on 1h rising to 3.0 on 4h and above
+//            Learned   k learned from this chart: how far past winning signals
+//                      moved against entry before they worked (80th pct + 0.25)
+//            Structure beyond the last 5 candles' extreme + 1 refATR
+//            Auto      whichever of the three has the best backtest on this chart
+//   The table backtests all methods live on the chart you are looking at.
+//   Research + offline backtest: magic-signal/backtest (same rules).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ───── Inputs
+string G1 = "Signal"
+int   fastLen  = input.int(21,  "Fast EMA",  minval = 1,  group = G1)
+int   slowLen  = input.int(55,  "Slow EMA",  minval = 2,  group = G1)
+int   trendLen = input.int(200, "Trend EMA", minval = 10, group = G1)
+bool  useAdx   = input.bool(true, "Strong trends only (ADX)", group = G1, tooltip = "Skips crosses while ADX is below the minimum. In the backtest this raised the hit rate on 1h and 4h.")
+float adxMin   = input.float(25.0, "ADX minimum", minval = 0.0, group = G1)
+
+string G2 = "Stop-loss"
+string slMode = input.string("Magic", "Stop-loss method", options = ["Magic", "Learned", "Structure", "Auto"], group = G2, tooltip = "Magic: volatility stop scaled to the timeframe (best all-round in the backtest).\nLearned: width learned from how far past winners on this chart moved against entry.\nStructure: beyond the recent swing + buffer.\nAuto: picks the method with the best backtest on this chart (needs 20 trades per method).")
+float kUser   = input.float(0.0, "Magic multiplier (0 = auto by timeframe)", minval = 0.0, step = 0.1, group = G2)
+float scoreR  = input.float(2.0, "Backtest target (R)", minval = 0.5, step = 0.5, group = G2, tooltip = "Target used to score trades in the table. TP1/TP2/TP3 are always 1R/2R/3R.")
+
+string G3 = "Display"
+bool  showLevels = input.bool(true, "Show SL / TP lines", group = G3)
+bool  showTable  = input.bool(true, "Show backtest table", group = G3)
+bool  showTrend  = input.bool(true, "Show trend EMA", group = G3)
+color bullCol    = input.color(#00c853, "Buy", group = G3)
+color bearCol    = input.color(#ff1744, "Sell", group = G3)
+
+// Same constants as the offline backtest
+int   ATR_LEN    = 14
+int   ATR_AVG    = 100
+int   SWING_LEN  = 5
+float LEARN_MOVE = 3.0
+float LEARN_PCT  = 80.0
+int   LEARN_MIN  = 8
+int   AUTO_MIN   = 20
+float WIDE_ATR   = 4.0   // label warns when the stop is wider than this many refATR
+
+// ───── Core series (computed on every bar)
+float emaF   = ta.ema(close, fastLen)
+float emaS   = ta.ema(close, slowLen)
+float emaT   = ta.ema(close, trendLen)
+float atr    = ta.atr(ATR_LEN)
+float refAtr = math.max(atr, nz(ta.sma(atr, ATR_AVG), atr))
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+bool  crossUp = ta.crossover(emaF, emaS)
+bool  crossDn = ta.crossunder(emaF, emaS)
+float lo5     = ta.lowest(low, SWING_LEN)
+float hi5     = ta.highest(high, SWING_LEN)
+
+bool strong   = not useAdx or adxVal > adxMin
+bool warm     = bar_index >= trendLen
+bool longSig  = warm and barstate.isconfirmed and crossUp and close > emaT and strong
+bool shortSig = warm and barstate.isconfirmed and crossDn and close < emaT and strong
+int  sig      = longSig ? 1 : shortSig ? -1 : 0
+
+// Timeframe-aware multiplier: 2.5 on 1h and below, 3.0 on 4h and above
+float tfHours = timeframe.in_seconds(timeframe.period) / 3600.0
+float kAuto   = 2.5 + 0.5 * math.max(0.0, math.min(1.0, math.log(math.max(tfHours, 1.0)) / math.log(2.0) / 2.0))
+float kMagic  = kUser > 0 ? kUser : kAuto
+
+// ───── Virtual trades (one per method per signal) - method 0 Magic, 1 Learned, 2 Structure, 3 Auto
+var array<int>   tMeth  = array.new<int>()
+var array<int>   tSide  = array.new<int>()
+var array<float> tEntry = array.new<float>()
+var array<float> tRisk  = array.new<float>()
+var array<float> tMfe   = array.new<float>()
+var array<bool>  tDone  = array.new<bool>()
+
+var array<int>   nScored = array.new<int>(4, 0)
+var array<int>   nWin    = array.new<int>(4, 0)
+var array<float> sumR    = array.new<float>(4, 0.0)
+var array<int>   nClosed = array.new<int>(4, 0)
+var array<int>   nTp1    = array.new<int>(4, 0)
+var array<int>   nTp2    = array.new<int>(4, 0)
+var array<int>   nTp3    = array.new<int>(4, 0)
+
+int nOpen = array.size(tSide)
+if nOpen > 0
+    for j = nOpen - 1 to 0
+        int   s     = array.get(tSide, j)
+        float e     = array.get(tEntry, j)
+        float rk    = array.get(tRisk, j)
+        int   m     = array.get(tMeth, j)
+        float mfe   = array.get(tMfe, j)
+        bool  hitSl = s == 1 ? low <= e - rk : high >= e + rk
+        bool  opp   = sig == -s
+        if not hitSl
+            mfe := math.max(mfe, (s == 1 ? high - e : e - low) / rk)
+            array.set(tMfe, j, mfe)
+        if not array.get(tDone, j)
+            float r = na
+            if hitSl
+                r := -1.0
+            else if mfe >= scoreR
+                r := scoreR
+            else if opp
+                r := s * (close - e) / rk
+            if not na(r)
+                array.set(tDone, j, true)
+                array.set(nScored, m, array.get(nScored, m) + 1)
+                array.set(sumR, m, array.get(sumR, m) + r)
+                if r > 0
+                    array.set(nWin, m, array.get(nWin, m) + 1)
+        // keep following the trade for TP1/2/3 stats until SL or an opposite signal
+        if hitSl or opp
+            array.set(nClosed, m, array.get(nClosed, m) + 1)
+            if mfe >= 1
+                array.set(nTp1, m, array.get(nTp1, m) + 1)
+            if mfe >= 2
+                array.set(nTp2, m, array.get(nTp2, m) + 1)
+            if mfe >= 3
+                array.set(nTp3, m, array.get(nTp3, m) + 1)
+            array.remove(tMeth, j)
+            array.remove(tSide, j)
+            array.remove(tEntry, j)
+            array.remove(tRisk, j)
+            array.remove(tMfe, j)
+            array.remove(tDone, j)
+
+// ───── Learner: how far do winning signals on THIS chart go against entry first?
+var array<int>   lSide   = array.new<int>()
+var array<float> lEntry  = array.new<float>()
+var array<float> lRef    = array.new<float>()
+var array<float> lMae    = array.new<float>()
+var array<float> learned = array.new<float>()
+
+int nLearn = array.size(lSide)
+if nLearn > 0
+    for j = nLearn - 1 to 0
+        int   s   = array.get(lSide, j)
+        float e   = array.get(lEntry, j)
+        float ra  = array.get(lRef, j)
+        float mae = math.max(array.get(lMae, j), s == 1 ? e - low : high - e)
+        array.set(lMae, j, mae)
+        bool won  = (s == 1 ? high - e : e - low) >= LEARN_MOVE * ra
+        if won
+            array.push(learned, mae / ra)
+        if won or sig == -s
+            array.remove(lSide, j)
+            array.remove(lEntry, j)
+            array.remove(lRef, j)
+            array.remove(lMae, j)
+
+// ───── Helpers
+avgR(int m) =>
+    int n = array.get(nScored, m)
+    n > 0 ? array.get(sumR, m) / n : na
+
+pct(int a, int b) =>
+    b > 0 ? 100.0 * a / b : na
+
+fmtPct(float x) =>
+    na(x) ? "–" : str.tostring(x, "#")
+
+methodName(int m) =>
+    m == 0 ? "Magic" : m == 1 ? "Learned" : m == 2 ? "Structure" : "Auto"
+
+// ───── Drawing state for the latest shown signal
+var int   aSide  = 0
+var float aEntry = na
+var float aRisk  = na
+var line  lnSl   = na
+var line  lnT1   = na
+var line  lnT2   = na
+var line  lnT3   = na
+
+// extend / stop the previous signal's lines
+if aSide != 0
+    bool slHit  = aSide == 1 ? low <= aEntry - aRisk : high >= aEntry + aRisk
+    bool tp3Hit = aSide == 1 ? high >= aEntry + 3 * aRisk : low <= aEntry - 3 * aRisk
+    if showLevels and not na(lnSl)
+        line.set_x2(lnSl, bar_index)
+        line.set_x2(lnT1, bar_index)
+        line.set_x2(lnT2, bar_index)
+        line.set_x2(lnT3, bar_index)
+    if slHit or tp3Hit or sig == -aSide
+        aSide := 0
+
+// ───── New signal
+if sig != 0
+    float e      = close
+    float a      = refAtr
+    float kLearn = array.size(learned) >= LEARN_MIN ? math.max(1.0, math.min(8.0, array.percentile_linear_interpolation(learned, LEARN_PCT))) + 0.25 : kMagic
+    float dMagic = kMagic * a
+    float dLearn = kLearn * a
+    float dStruc = math.max(sig == 1 ? e - lo5 : hi5 - e, 0.0) + a
+
+    // Auto: best backtested expectancy so far on this chart (needs AUTO_MIN trades each)
+    int autoM = 0
+    if array.get(nScored, 0) >= AUTO_MIN and array.get(nScored, 1) >= AUTO_MIN and array.get(nScored, 2) >= AUTO_MIN
+        for m = 1 to 2
+            if avgR(m) > avgR(autoM)
+                autoM := m
+
+    for m = 0 to 3
+        int   src = m == 3 ? autoM : m
+        float d   = src == 0 ? dMagic : src == 1 ? dLearn : dStruc
+        array.push(tMeth, m)
+        array.push(tSide, sig)
+        array.push(tEntry, e)
+        array.push(tRisk, d)
+        array.push(tMfe, 0.0)
+        array.push(tDone, false)
+
+    array.push(lSide, sig)
+    array.push(lEntry, e)
+    array.push(lRef, a)
+    array.push(lMae, 0.0)
+
+    int   shown = slMode == "Magic" ? 0 : slMode == "Learned" ? 1 : slMode == "Structure" ? 2 : autoM
+    float risk  = shown == 0 ? dMagic : shown == 1 ? dLearn : dStruc
+    float slP   = e - sig * risk
+    float tp1   = e + sig * risk
+    float tp2   = e + sig * 2 * risk
+    float tp3   = e + sig * 3 * risk
+    color col   = sig == 1 ? bullCol : bearCol
+    bool  wide  = risk > WIDE_ATR * a
+    string how  = slMode == "Auto" ? "Auto→" + methodName(shown) : methodName(shown)
+
+    string txt = (sig == 1 ? "BUY" : "SELL") + "\nSL " + str.tostring(slP, format.mintick) + " (" + str.tostring(100 * risk / e, "#.##") + "%)" + (wide ? "\n⚠ wide SL · size down" : "")
+    string tip = how + " stop · " + str.tostring(risk / a, "#.#") + "× refATR" + "\nEntry " + str.tostring(e, format.mintick) + "\nSL  " + str.tostring(slP, format.mintick) + "\nTP1 " + str.tostring(tp1, format.mintick) + "  (1R)" + "\nTP2 " + str.tostring(tp2, format.mintick) + "  (2R)" + "\nTP3 " + str.tostring(tp3, format.mintick) + "  (3R)"
+    label.new(bar_index, sig == 1 ? low : high, txt, style = sig == 1 ? label.style_label_up : label.style_label_down, color = col, textcolor = color.white, size = size.small, tooltip = tip)
+
+    if showLevels
+        lnSl := line.new(bar_index, slP, bar_index + 1, slP, color = bearCol, style = line.style_dashed, width = 2)
+        lnT1 := line.new(bar_index, tp1, bar_index + 1, tp1, color = color.new(bullCol, 50), style = line.style_dotted)
+        lnT2 := line.new(bar_index, tp2, bar_index + 1, tp2, color = color.new(bullCol, 30), style = line.style_dotted)
+        lnT3 := line.new(bar_index, tp3, bar_index + 1, tp3, color = color.new(bullCol, 0), style = line.style_dotted)
+    aSide  := sig
+    aEntry := e
+    aRisk  := risk
+
+    alert((sig == 1 ? "Magic BUY " : "Magic SELL ") + syminfo.ticker + " " + timeframe.period + " @ " + str.tostring(e, format.mintick) + " | SL " + str.tostring(slP, format.mintick) + " (" + how + ", " + str.tostring(100 * risk / e, "#.##") + "%) | TP1 " + str.tostring(tp1, format.mintick) + " | TP2 " + str.tostring(tp2, format.mintick) + " | TP3 " + str.tostring(tp3, format.mintick), alert.freq_once_per_bar_close)
+
+alertcondition(longSig, "Magic BUY", "Magic Signal BUY on {{ticker}} {{interval}} at {{close}}")
+alertcondition(shortSig, "Magic SELL", "Magic Signal SELL on {{ticker}} {{interval}} at {{close}}")
+
+plot(showTrend ? emaT : na, "Trend EMA", color = close > emaT ? color.new(bullCol, 40) : color.new(bearCol, 40), linewidth = 2)
+
+// ───── Backtest table (this symbol, this timeframe)
+var table tbl = table.new(position.top_right, 7, 6, bgcolor = color.new(color.black, 20), border_width = 1, border_color = color.new(color.gray, 70))
+if showTable and barstate.isfirst
+    table.merge_cells(tbl, 0, 0, 6, 0)
+if showTable and barstate.islast
+    int shownNow = slMode == "Magic" ? 0 : slMode == "Learned" ? 1 : slMode == "Structure" ? 2 : 3
+    table.cell(tbl, 0, 0, "Magic backtest · this chart · target " + str.tostring(scoreR) + "R · k " + str.tostring(kMagic, "#.##"), text_color = color.white, text_size = size.small)
+    array<string> heads = array.from("Stop", "Trades", "Win %", "Avg R", "TP1 %", "TP2 %", "TP3 %")
+    for c = 0 to 6
+        table.cell(tbl, c, 1, array.get(heads, c), text_color = color.silver, text_size = size.tiny)
+    for m = 0 to 3
+        color  fg  = m == shownNow ? color.yellow : color.white
+        float  ar  = avgR(m)
+        int    row = m + 2
+        table.cell(tbl, 0, row, methodName(m) + (m == shownNow ? " ●" : ""), text_color = fg, text_size = size.small, text_halign = text.align_left)
+        table.cell(tbl, 1, row, str.tostring(array.get(nScored, m)), text_color = fg, text_size = size.small)
+        table.cell(tbl, 2, row, fmtPct(pct(array.get(nWin, m), array.get(nScored, m))), text_color = fg, text_size = size.small)
+        table.cell(tbl, 3, row, na(ar) ? "–" : str.tostring(ar, "+#.##;-#.##"), text_color = na(ar) ? fg : ar > 0 ? bullCol : bearCol, text_size = size.small)
+        table.cell(tbl, 4, row, fmtPct(pct(array.get(nTp1, m), array.get(nClosed, m))), text_color = fg, text_size = size.small)
+        table.cell(tbl, 5, row, fmtPct(pct(array.get(nTp2, m), array.get(nClosed, m))), text_color = fg, text_size = size.small)
+        table.cell(tbl, 6, row, fmtPct(pct(array.get(nTp3, m), array.get(nClosed, m))), text_color = fg, text_size = size.small)
